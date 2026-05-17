@@ -1,0 +1,8 @@
+[
+    uuid(8b7eb1c8-75d7-4dc7-92fc-26846d6f8b52),
+    version(1.0)
+]
+interface TrayControl
+{
+    void TrayStopService([in] handle_t binding);
+}
