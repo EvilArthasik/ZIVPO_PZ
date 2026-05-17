@@ -10,7 +10,12 @@
 #include <shellapi.h>
 #include <sddl.h>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#include "common/constants.h"
+#include "gui/rpc_client.h"
+#include "gui/service_guard.h"
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -207,6 +212,10 @@ bool IsHiddenStartupRequested() {
     return hidden;
 }
 
+bool IsServiceChildMode(std::wstring_view commandLine) {
+    return commandLine.find(trayapp::kServiceChildArg) != std::wstring_view::npos;
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == g_taskbarCreatedMessage) {
         AddTrayIcon(hwnd);
@@ -228,6 +237,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         case IDM_TRAY_EXIT:
         case IDM_FILE_EXIT:
+            static_cast<void>(trayapp::gui::RequestServiceStop());
             RemoveTrayIcon(hwnd);
             DestroyWindow(hwnd);
             return 0;
@@ -273,6 +283,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 } // namespace
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    const std::wstring_view commandLine = GetCommandLineW();
+
+    if (trayapp::gui::CheckServiceStartup() == trayapp::gui::StartupDecision::Exit) {
+        return 0;
+    }
+
+    if (!IsServiceChildMode(commandLine) || !trayapp::gui::IsParentServiceProcess()) {
+        return 0;
+    }
+
     g_hInstance = instance;
     g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
 
