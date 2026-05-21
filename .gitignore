@@ -1,0 +1,9 @@
+build/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.user
+*.vcxproj
+*.vcxproj.filters
+*.sln
