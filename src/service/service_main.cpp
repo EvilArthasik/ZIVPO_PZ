@@ -13,6 +13,10 @@
 #include <vector>
 
 #include "rpc/tray_control_api.h"
+#include "service/auth_license_manager.h"
+
+extern "C" void* __RPC_USER midl_user_allocate(size_t size);
+extern "C" void __RPC_USER midl_user_free(void* pointer);
 
 namespace {
 
@@ -27,6 +31,7 @@ SERVICE_STATUS g_status = {};
 CRITICAL_SECTION g_childrenLock = {};
 std::vector<ChildProcess> g_children;
 LONG g_stopping = 0;
+trayapp::service::AuthLicenseManager g_authLicenseManager;
 constexpr DWORD kStopConfirmationTimeoutSeconds = 30;
 
 class UniqueHandle {
@@ -456,6 +461,7 @@ RPC_STATUS RequestRpcServerStop()
     }
 
     SetServiceStatusState(SERVICE_STOP_PENDING);
+    g_authLicenseManager.Stop();
     TerminateAllChildProcesses();
 
     const RPC_STATUS status = RpcMgmtStopServerListening(nullptr);
@@ -531,6 +537,7 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
         return;
     }
 
+    g_authLicenseManager.Start();
     SetServiceStatusState(SERVICE_RUNNING);
     LaunchGuiForAllUserSessions();
 
@@ -540,6 +547,7 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
         FALSE);
 
     SetServiceStatusState(SERVICE_STOP_PENDING);
+    g_authLicenseManager.Stop();
     TerminateAllChildProcesses();
     RpcServerUnregisterIf(TrayControl_v1_0_s_ifspec, nullptr, FALSE);
 
@@ -548,6 +556,45 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
         listenStatus == RPC_S_OK || listenStatus == RPC_S_ALREADY_LISTENING ? NO_ERROR : listenStatus);
 
     DeleteCriticalSection(&g_childrenLock);
+}
+
+void AssignRpcString(wchar_t** destination, const std::wstring& value)
+{
+    if (destination == nullptr) {
+        return;
+    }
+
+    const size_t bytes = (value.size() + 1) * sizeof(wchar_t);
+    auto* buffer = static_cast<wchar_t*>(midl_user_allocate(bytes));
+    if (buffer == nullptr) {
+        *destination = nullptr;
+        return;
+    }
+
+    std::copy(value.begin(), value.end(), buffer);
+    buffer[value.size()] = L'\0';
+    *destination = buffer;
+}
+
+void FillRpcAuthState(TrayAuthState* state, const trayapp::service::AuthSnapshot& snapshot)
+{
+    if (state == nullptr) {
+        return;
+    }
+
+    state->authenticated = snapshot.authenticated ? 1 : 0;
+    AssignRpcString(&state->username, snapshot.username);
+}
+
+void FillRpcLicenseState(TrayLicenseState* state, const trayapp::service::LicenseSnapshot& snapshot)
+{
+    if (state == nullptr) {
+        return;
+    }
+
+    state->licensed = snapshot.licensed ? 1 : 0;
+    state->blocked = snapshot.blocked ? 1 : 0;
+    state->expiresAtUnix = snapshot.expiresAtUnix;
 }
 
 [[nodiscard]] bool CommandLineContains(std::wstring_view commandLine, std::wstring_view argument)
@@ -737,6 +784,50 @@ extern "C" void TrayStopService(handle_t)
     }
 
     static_cast<void>(RequestRpcServerStop());
+}
+
+extern "C" unsigned long TrayGetAuthState(handle_t, TrayAuthState* state)
+{
+    FillRpcAuthState(state, g_authLicenseManager.GetAuthSnapshot());
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayLogin(handle_t, wchar_t* username, wchar_t* password, TrayAuthState* state)
+{
+    trayapp::service::AuthSnapshot snapshot;
+    const unsigned long result = g_authLicenseManager.Login(
+        username != nullptr ? username : L"",
+        password != nullptr ? password : L"",
+        snapshot);
+
+    FillRpcAuthState(state, snapshot);
+    return result;
+}
+
+extern "C" void TrayLogout(handle_t)
+{
+    g_authLicenseManager.Logout();
+}
+
+extern "C" unsigned long TrayGetLicenseState(handle_t, TrayLicenseState* state)
+{
+    trayapp::service::LicenseSnapshot snapshot;
+    const unsigned long result = g_authLicenseManager.GetLicenseSnapshot(snapshot);
+    FillRpcLicenseState(state, snapshot);
+    return result;
+}
+
+extern "C" unsigned long TrayActivateProduct(handle_t, wchar_t* licenseKey, TrayLicenseState* state)
+{
+    trayapp::service::LicenseSnapshot snapshot;
+    const unsigned long result = g_authLicenseManager.Activate(licenseKey != nullptr ? licenseKey : L"", snapshot);
+    FillRpcLicenseState(state, snapshot);
+    return result;
+}
+
+extern "C" unsigned long TrayEnsureAntivirusAvailable(handle_t)
+{
+    return g_authLicenseManager.EnsureAntivirusAvailable();
 }
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR commandLine, int)

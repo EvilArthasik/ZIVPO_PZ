@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <sddl.h>
+#include <ctime>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,13 +31,28 @@ constexpr UINT WM_TRAYICON = WM_APP + 1;
 constexpr UINT IDM_TRAY_OPEN = 2001;
 constexpr UINT IDM_TRAY_EXIT = 2002;
 constexpr UINT IDM_FILE_EXIT = 3001;
+constexpr UINT IDM_FILE_LOGOUT = 3002;
 constexpr int kTrayMenuBottomMargin = 12;
+constexpr UINT_PTR kLicensePollTimer = 4001;
+
+constexpr int IDC_LOGIN_EDIT = 5001;
+constexpr int IDC_PASSWORD_EDIT = 5002;
+constexpr int IDC_LOGIN_BUTTON = 5003;
+constexpr int IDC_ACTIVATION_EDIT = 5004;
+constexpr int IDC_ACTIVATE_BUTTON = 5005;
+constexpr int IDC_LOGOUT_BUTTON = 5006;
+constexpr int IDC_SCAN_BUTTON = 5007;
 
 HINSTANCE g_hInstance = nullptr;
 HWND g_mainWindow = nullptr;
 UINT g_taskbarCreatedMessage = 0;
 HANDLE g_singleInstanceMutex = nullptr;
 HICON g_trayIcon = nullptr;
+HFONT g_defaultFont = nullptr;
+
+trayapp::gui::AuthState g_authState;
+trayapp::gui::LicenseState g_licenseState;
+std::wstring g_statusText;
 
 std::wstring GetCurrentUserSidString() {
     HANDLE token = nullptr;
@@ -168,26 +184,225 @@ void BuildMainMenu(HWND hwnd) {
     HMENU menuBar = CreateMenu();
     HMENU fileMenu = CreatePopupMenu();
 
+    AppendMenuW(fileMenu, MF_STRING, IDM_FILE_LOGOUT, L"Выйти из аккаунта");
+    AppendMenuW(fileMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(fileMenu, MF_STRING, IDM_FILE_EXIT, L"Выход");
     AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"Файл");
 
     SetMenu(hwnd, menuBar);
 }
 
-void CreateMainContent(HWND hwnd) {
-    CreateWindowExW(
+HWND AddControl(HWND parent, const wchar_t* className, const wchar_t* text, DWORD style, int x, int y, int width, int height, int id) {
+    HWND control = CreateWindowExW(
         0,
-        L"STATIC",
-        L"Приложение работает в трее.\r\nЗакрытие окна скрывает его, но не завершает приложение.",
-        WS_CHILD | WS_VISIBLE,
-        20,
-        20,
-        420,
-        60,
-        hwnd,
-        nullptr,
+        className,
+        text,
+        WS_CHILD | WS_VISIBLE | style,
+        x,
+        y,
+        width,
+        height,
+        parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
         g_hInstance,
         nullptr);
+
+    if (control != nullptr && g_defaultFont != nullptr) {
+        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_defaultFont), TRUE);
+    }
+
+    return control;
+}
+
+std::wstring FormatUnixDate(long long unixTime) {
+    if (unixTime <= 0) {
+        return L"неизвестно";
+    }
+
+    std::time_t raw = static_cast<std::time_t>(unixTime);
+    std::tm localTime {};
+    if (localtime_s(&localTime, &raw) != 0) {
+        return L"неизвестно";
+    }
+
+    wchar_t buffer[64] = {};
+    if (wcsftime(buffer, ARRAYSIZE(buffer), L"%d.%m.%Y %H:%M", &localTime) == 0) {
+        return L"неизвестно";
+    }
+
+    return buffer;
+}
+
+void ClearMainContent(HWND hwnd) {
+    HWND child = GetWindow(hwnd, GW_CHILD);
+    while (child != nullptr) {
+        HWND next = GetWindow(child, GW_HWNDNEXT);
+        DestroyWindow(child);
+        child = next;
+    }
+}
+
+std::wstring WindowText(HWND hwnd, int id) {
+    HWND control = GetDlgItem(hwnd, id);
+    if (control == nullptr) {
+        return {};
+    }
+
+    const int length = GetWindowTextLengthW(control);
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    GetWindowTextW(control, text.data(), length + 1);
+    text.resize(static_cast<size_t>(length));
+    return text;
+}
+
+void CreateLoginContent(HWND hwnd) {
+    AddControl(hwnd, L"STATIC", L"Вход в учетную запись", 0, 20, 20, 300, 24, 0);
+    AddControl(hwnd, L"STATIC", L"Логин", 0, 20, 58, 120, 22, 0);
+    AddControl(hwnd, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 150, 55, 260, 24, IDC_LOGIN_EDIT);
+    AddControl(hwnd, L"STATIC", L"Пароль", 0, 20, 92, 120, 22, 0);
+    AddControl(hwnd, L"EDIT", L"", WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL, 150, 89, 260, 24, IDC_PASSWORD_EDIT);
+    AddControl(hwnd, L"BUTTON", L"Войти", BS_PUSHBUTTON, 150, 125, 120, 30, IDC_LOGIN_BUTTON);
+
+    if (!g_statusText.empty()) {
+        AddControl(hwnd, L"STATIC", g_statusText.c_str(), 0, 20, 170, 460, 42, 0);
+    }
+}
+
+void CreateActivationContent(HWND hwnd) {
+    const std::wstring header = L"Пользователь: " + g_authState.username;
+    AddControl(hwnd, L"STATIC", header.c_str(), 0, 20, 20, 420, 24, 0);
+    AddControl(hwnd, L"BUTTON", L"Выйти", BS_PUSHBUTTON, 370, 18, 90, 28, IDC_LOGOUT_BUTTON);
+    AddControl(hwnd, L"STATIC", L"Активная лицензия отсутствует. Антивирусная функциональность заблокирована.", 0, 20, 62, 460, 38, 0);
+    AddControl(hwnd, L"STATIC", L"Код активации", 0, 20, 112, 120, 22, 0);
+    AddControl(hwnd, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 150, 109, 260, 24, IDC_ACTIVATION_EDIT);
+    AddControl(hwnd, L"BUTTON", L"Активировать", BS_PUSHBUTTON, 150, 145, 140, 30, IDC_ACTIVATE_BUTTON);
+
+    if (!g_statusText.empty()) {
+        AddControl(hwnd, L"STATIC", g_statusText.c_str(), 0, 20, 190, 460, 42, 0);
+    }
+}
+
+void CreateLicensedContent(HWND hwnd) {
+    const std::wstring user = L"Пользователь: " + g_authState.username;
+    const std::wstring license = L"Лицензия активна до: " + FormatUnixDate(g_licenseState.expiresAtUnix);
+
+    AddControl(hwnd, L"STATIC", user.c_str(), 0, 20, 20, 350, 24, 0);
+    AddControl(hwnd, L"BUTTON", L"Выйти", BS_PUSHBUTTON, 370, 18, 90, 28, IDC_LOGOUT_BUTTON);
+    AddControl(hwnd, L"STATIC", license.c_str(), 0, 20, 58, 420, 24, 0);
+    AddControl(hwnd, L"BUTTON", L"Проверить защиту", BS_PUSHBUTTON, 20, 100, 180, 34, IDC_SCAN_BUTTON);
+    AddControl(hwnd, L"STATIC", L"Антивирусная функциональность разблокирована.", 0, 20, 150, 420, 24, 0);
+
+    if (!g_statusText.empty()) {
+        AddControl(hwnd, L"STATIC", g_statusText.c_str(), 0, 20, 184, 460, 42, 0);
+    }
+}
+
+void RenderMainContent(HWND hwnd) {
+    ClearMainContent(hwnd);
+
+    if (!g_authState.authenticated) {
+        CreateLoginContent(hwnd);
+        return;
+    }
+
+    if (!g_licenseState.licensed) {
+        CreateActivationContent(hwnd);
+        return;
+    }
+
+    CreateLicensedContent(hwnd);
+}
+
+void RefreshStartupState(HWND hwnd) {
+    g_statusText.clear();
+    const unsigned long authStatus = trayapp::gui::GetAuthState(g_authState);
+    if (authStatus != trayapp::gui::kRpcSuccess) {
+        g_statusText = trayapp::gui::DescribeRpcStatus(authStatus);
+    }
+
+    if (g_authState.authenticated) {
+        const unsigned long licenseStatus = trayapp::gui::GetLicenseState(g_licenseState);
+        if (licenseStatus != trayapp::gui::kRpcSuccess) {
+            g_licenseState = {};
+            if (licenseStatus != trayapp::gui::kRpcNoLicense) {
+                g_statusText = trayapp::gui::DescribeRpcStatus(licenseStatus);
+            }
+        }
+    } else {
+        g_licenseState = {};
+    }
+
+    RenderMainContent(hwnd);
+}
+
+void PollLicenseState(HWND hwnd) {
+    if (!g_authState.authenticated) {
+        return;
+    }
+
+    trayapp::gui::LicenseState state;
+    const unsigned long status = trayapp::gui::GetLicenseState(state);
+    if (status == trayapp::gui::kRpcSuccess) {
+        g_licenseState = state;
+        g_statusText.clear();
+    } else if (status == trayapp::gui::kRpcNoLicense) {
+        g_licenseState = {};
+    } else {
+        g_statusText = trayapp::gui::DescribeRpcStatus(status);
+    }
+
+    RenderMainContent(hwnd);
+}
+
+void HandleLogin(HWND hwnd) {
+    trayapp::gui::AuthState state;
+    const unsigned long status = trayapp::gui::Login(WindowText(hwnd, IDC_LOGIN_EDIT), WindowText(hwnd, IDC_PASSWORD_EDIT), state);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_authState = {};
+        g_licenseState = {};
+        g_statusText = trayapp::gui::DescribeRpcStatus(status);
+        RenderMainContent(hwnd);
+        return;
+    }
+
+    g_authState = state;
+    g_licenseState = {};
+    g_statusText.clear();
+    PollLicenseState(hwnd);
+}
+
+void HandleActivate(HWND hwnd) {
+    trayapp::gui::LicenseState state;
+    const unsigned long status = trayapp::gui::ActivateProduct(WindowText(hwnd, IDC_ACTIVATION_EDIT), state);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_licenseState = {};
+        g_statusText = trayapp::gui::DescribeRpcStatus(status);
+        RenderMainContent(hwnd);
+        return;
+    }
+
+    g_licenseState = state;
+    g_statusText.clear();
+    RenderMainContent(hwnd);
+}
+
+void HandleLogout(HWND hwnd) {
+    trayapp::gui::Logout();
+    g_authState = {};
+    g_licenseState = {};
+    g_statusText.clear();
+    RenderMainContent(hwnd);
+}
+
+void HandleScan(HWND hwnd) {
+    const unsigned long status = trayapp::gui::EnsureAntivirusAvailable();
+    g_statusText = status == trayapp::gui::kRpcSuccess
+        ? L"Проверка доступна: лицензия подтверждена службой."
+        : trayapp::gui::DescribeRpcStatus(status);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_licenseState = {};
+    }
+    RenderMainContent(hwnd);
 }
 
 bool IsHiddenStartupRequested() {
@@ -225,7 +440,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     switch (message) {
     case WM_CREATE:
         BuildMainMenu(hwnd);
-        CreateMainContent(hwnd);
+        g_defaultFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        RefreshStartupState(hwnd);
+        SetTimer(hwnd, kLicensePollTimer, 30000, nullptr);
         AddTrayIcon(hwnd);
         return 0;
 
@@ -241,12 +458,33 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             RemoveTrayIcon(hwnd);
             DestroyWindow(hwnd);
             return 0;
+        case IDM_FILE_LOGOUT:
+            HandleLogout(hwnd);
+            return 0;
+        case IDC_LOGIN_BUTTON:
+            HandleLogin(hwnd);
+            return 0;
+        case IDC_ACTIVATE_BUTTON:
+            HandleActivate(hwnd);
+            return 0;
+        case IDC_LOGOUT_BUTTON:
+            HandleLogout(hwnd);
+            return 0;
+        case IDC_SCAN_BUTTON:
+            HandleScan(hwnd);
+            return 0;
         default:
             break;
         }
         break;
     }
 
+    case WM_TIMER:
+        if (wParam == kLicensePollTimer) {
+            PollLicenseState(hwnd);
+            return 0;
+        }
+        break;
     case WM_TRAYICON:
         switch (LOWORD(lParam)) {
         case NIN_SELECT:
@@ -269,6 +507,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_DESTROY:
+        KillTimer(hwnd, kLicensePollTimer);
         RemoveTrayIcon(hwnd);
         PostQuitMessage(0);
         return 0;

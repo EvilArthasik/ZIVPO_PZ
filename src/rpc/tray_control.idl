@@ -4,5 +4,29 @@
 ]
 interface TrayControl
 {
+    typedef struct TrayAuthState {
+        int authenticated;
+        [string] wchar_t* username;
+    } TrayAuthState;
+
+    typedef struct TrayLicenseState {
+        int licensed;
+        int blocked;
+        hyper expiresAtUnix;
+    } TrayLicenseState;
+
     void TrayStopService([in] handle_t binding);
+    unsigned long TrayGetAuthState([in] handle_t binding, [out] TrayAuthState* state);
+    unsigned long TrayLogin(
+        [in] handle_t binding,
+        [in, string] wchar_t* username,
+        [in, string] wchar_t* password,
+        [out] TrayAuthState* state);
+    void TrayLogout([in] handle_t binding);
+    unsigned long TrayGetLicenseState([in] handle_t binding, [out] TrayLicenseState* state);
+    unsigned long TrayActivateProduct(
+        [in] handle_t binding,
+        [in, string] wchar_t* licenseKey,
+        [out] TrayLicenseState* state);
+    unsigned long TrayEnsureAntivirusAvailable([in] handle_t binding);
 }

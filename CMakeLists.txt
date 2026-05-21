@@ -176,6 +176,7 @@ add_executable(TraySampleApp WIN32
 
 add_executable(TraySampleService WIN32
     src/service/service_main.cpp
+    src/service/auth_license_manager.cpp
 )
 
 add_dependencies(TraySampleApp TrayRpcClientStub)
@@ -205,4 +206,4 @@ else()
 endif()
 
 target_link_libraries(TraySampleApp PRIVATE TrayRpcClientStub shell32 advapi32 rpcrt4 user32)
-target_link_libraries(TraySampleService PRIVATE TrayRpcServerStub advapi32 rpcrt4 userenv wtsapi32)
+target_link_libraries(TraySampleService PRIVATE TrayRpcServerStub advapi32 rpcrt4 userenv wtsapi32 winhttp)
