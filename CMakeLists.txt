@@ -177,6 +177,8 @@ add_executable(TraySampleApp WIN32
 add_executable(TraySampleService WIN32
     src/service/service_main.cpp
     src/service/auth_license_manager.cpp
+    src/service/antivirus_engine.cpp
+    src/service/antivirus_manager.cpp
 )
 
 add_dependencies(TraySampleApp TrayRpcClientStub)
@@ -205,5 +207,5 @@ else()
     target_compile_options(TraySampleService PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-target_link_libraries(TraySampleApp PRIVATE TrayRpcClientStub shell32 advapi32 rpcrt4 user32)
-target_link_libraries(TraySampleService PRIVATE TrayRpcServerStub advapi32 rpcrt4 userenv wtsapi32 winhttp)
+target_link_libraries(TraySampleApp PRIVATE TrayRpcClientStub shell32 advapi32 rpcrt4 user32 ole32)
+target_link_libraries(TraySampleService PRIVATE TrayRpcServerStub advapi32 rpcrt4 userenv wtsapi32 winhttp bcrypt)

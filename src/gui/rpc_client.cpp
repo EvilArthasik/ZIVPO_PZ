@@ -55,6 +55,20 @@ void CopyLicenseState(const TrayLicenseState& rpcState, LicenseState& state)
     state.expiresAtUnix = rpcState.expiresAtUnix;
 }
 
+void CopyDatabaseInfo(const TrayAvDatabaseInfo& rpcInfo, AvDatabaseInfo& info)
+{
+    info.releaseDateUnix = rpcInfo.releaseDateUnix;
+    info.recordCount = rpcInfo.recordCount;
+}
+
+void CopyScanReport(const TrayScanReport& rpcReport, ScanReport& report)
+{
+    report.malicious = rpcReport.malicious != 0;
+    report.scannedFiles = rpcReport.scannedFiles;
+    report.infectedFiles = rpcReport.infectedFiles;
+    report.summary = rpcReport.summary != nullptr ? rpcReport.summary : L"";
+}
+
 void FreeBinding(handle_t* binding)
 {
     if (binding != nullptr && *binding != nullptr) {
@@ -230,6 +244,199 @@ unsigned long EnsureAntivirusAvailable()
     }
     RpcEndExcept
 
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long GetAvDatabaseInfo(AvDatabaseInfo& info)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    TrayAvDatabaseInfo rpcInfo {};
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayGetAvDatabaseInfo(binding, &rpcInfo);
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    CopyDatabaseInfo(rpcInfo, info);
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long ScanFile(const std::wstring& path, ScanReport& report)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    TrayScanReport rpcReport {};
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayScanFile(binding, const_cast<wchar_t*>(path.c_str()), &rpcReport);
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    CopyScanReport(rpcReport, report);
+    midl_user_free(rpcReport.summary);
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long ScanDirectory(const std::wstring& path, ScanReport& report)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    TrayScanReport rpcReport {};
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayScanDirectory(binding, const_cast<wchar_t*>(path.c_str()), &rpcReport);
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    CopyScanReport(rpcReport, report);
+    midl_user_free(rpcReport.summary);
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long ScanFixedDrives(ScanReport& report)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    TrayScanReport rpcReport {};
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayScanFixedDrives(binding, &rpcReport);
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    CopyScanReport(rpcReport, report);
+    midl_user_free(rpcReport.summary);
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long ConfigureSchedule(unsigned long intervalMinutes)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayConfigureSchedule(binding, intervalMinutes);
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long GetScheduledScanReport(ScanReport& report)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    TrayScanReport rpcReport {};
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayGetScheduledScanReport(binding, &rpcReport);
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    CopyScanReport(rpcReport, report);
+    midl_user_free(rpcReport.summary);
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long AddMonitorDirectory(const std::wstring& path)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayAddMonitorDirectory(binding, const_cast<wchar_t*>(path.c_str()));
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    FreeBinding(&binding);
+    return result;
+}
+
+unsigned long GetMonitorScanReport(ScanReport& report)
+{
+    handle_t binding = nullptr;
+    if (CreateBinding(&binding) != RPC_S_OK) {
+        return kRpcNetworkError;
+    }
+
+    TrayScanReport rpcReport {};
+    unsigned long result = kRpcNetworkError;
+    RpcTryExcept
+    {
+        result = TrayGetMonitorScanReport(binding, &rpcReport);
+    }
+    RpcExcept(1)
+    {
+        result = kRpcNetworkError;
+    }
+    RpcEndExcept
+
+    CopyScanReport(rpcReport, report);
+    midl_user_free(rpcReport.summary);
     FreeBinding(&binding);
     return result;
 }

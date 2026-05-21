@@ -7,9 +7,12 @@
 #endif
 
 #include <windows.h>
+#include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <sddl.h>
 #include <ctime>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,7 +44,12 @@ constexpr int IDC_LOGIN_BUTTON = 5003;
 constexpr int IDC_ACTIVATION_EDIT = 5004;
 constexpr int IDC_ACTIVATE_BUTTON = 5005;
 constexpr int IDC_LOGOUT_BUTTON = 5006;
-constexpr int IDC_SCAN_BUTTON = 5007;
+constexpr int IDC_SCAN_FILE_BUTTON = 5007;
+constexpr int IDC_SCAN_DIR_BUTTON = 5008;
+constexpr int IDC_SCAN_DRIVES_BUTTON = 5009;
+constexpr int IDC_SCHEDULE_BUTTON = 5010;
+constexpr int IDC_MONITOR_BUTTON = 5011;
+constexpr int IDC_MONITOR_REPORT_BUTTON = 5012;
 
 HINSTANCE g_hInstance = nullptr;
 HWND g_mainWindow = nullptr;
@@ -52,6 +60,7 @@ HFONT g_defaultFont = nullptr;
 
 trayapp::gui::AuthState g_authState;
 trayapp::gui::LicenseState g_licenseState;
+trayapp::gui::AvDatabaseInfo g_avDatabaseInfo;
 std::wstring g_statusText;
 
 std::wstring GetCurrentUserSidString() {
@@ -242,6 +251,47 @@ void ClearMainContent(HWND hwnd) {
     }
 }
 
+std::wstring FormatScanReport(const trayapp::gui::ScanReport& report) {
+    std::wstringstream stream;
+    stream << L"Проверено файлов: " << report.scannedFiles
+           << L", заражено: " << report.infectedFiles << L". ";
+    if (!report.summary.empty()) {
+        stream << report.summary;
+    } else {
+        stream << (report.malicious ? L"Найдены угрозы." : L"Угроз не найдено.");
+    }
+    return stream.str();
+}
+
+std::wstring PickFile(HWND hwnd) {
+    wchar_t path[MAX_PATH] = {};
+    OPENFILENAMEW dialog {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = hwnd;
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = ARRAYSIZE(path);
+    dialog.lpstrFilter = L"Все файлы\0*.*\0";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    return GetOpenFileNameW(&dialog) ? path : L"";
+}
+
+std::wstring PickDirectory(HWND hwnd) {
+    BROWSEINFOW browse {};
+    browse.hwndOwner = hwnd;
+    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    browse.lpszTitle = L"Выберите директорию";
+
+    PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&browse);
+    if (item == nullptr) {
+        return {};
+    }
+
+    wchar_t path[MAX_PATH] = {};
+    const bool ok = SHGetPathFromIDListW(item, path) != FALSE;
+    CoTaskMemFree(item);
+    return ok ? path : L"";
+}
+
 std::wstring WindowText(HWND hwnd, int id) {
     HWND control = GetDlgItem(hwnd, id);
     if (control == nullptr) {
@@ -285,15 +335,23 @@ void CreateActivationContent(HWND hwnd) {
 void CreateLicensedContent(HWND hwnd) {
     const std::wstring user = L"Пользователь: " + g_authState.username;
     const std::wstring license = L"Лицензия активна до: " + FormatUnixDate(g_licenseState.expiresAtUnix);
+    const std::wstring database = L"Антивирусные базы: " +
+        FormatUnixDate(g_avDatabaseInfo.releaseDateUnix) +
+        L", записей: " + std::to_wstring(g_avDatabaseInfo.recordCount);
 
     AddControl(hwnd, L"STATIC", user.c_str(), 0, 20, 20, 350, 24, 0);
     AddControl(hwnd, L"BUTTON", L"Выйти", BS_PUSHBUTTON, 370, 18, 90, 28, IDC_LOGOUT_BUTTON);
     AddControl(hwnd, L"STATIC", license.c_str(), 0, 20, 58, 420, 24, 0);
-    AddControl(hwnd, L"BUTTON", L"Проверить защиту", BS_PUSHBUTTON, 20, 100, 180, 34, IDC_SCAN_BUTTON);
-    AddControl(hwnd, L"STATIC", L"Антивирусная функциональность разблокирована.", 0, 20, 150, 420, 24, 0);
+    AddControl(hwnd, L"STATIC", database.c_str(), 0, 20, 88, 460, 24, 0);
+    AddControl(hwnd, L"BUTTON", L"Сканировать файл", BS_PUSHBUTTON, 20, 125, 150, 30, IDC_SCAN_FILE_BUTTON);
+    AddControl(hwnd, L"BUTTON", L"Сканировать папку", BS_PUSHBUTTON, 180, 125, 160, 30, IDC_SCAN_DIR_BUTTON);
+    AddControl(hwnd, L"BUTTON", L"Все диски", BS_PUSHBUTTON, 350, 125, 110, 30, IDC_SCAN_DRIVES_BUTTON);
+    AddControl(hwnd, L"BUTTON", L"Расписание 60 мин", BS_PUSHBUTTON, 20, 165, 150, 30, IDC_SCHEDULE_BUTTON);
+    AddControl(hwnd, L"BUTTON", L"Мониторинг папки", BS_PUSHBUTTON, 180, 165, 160, 30, IDC_MONITOR_BUTTON);
+    AddControl(hwnd, L"BUTTON", L"Фоновые итоги", BS_PUSHBUTTON, 350, 165, 110, 30, IDC_MONITOR_REPORT_BUTTON);
 
     if (!g_statusText.empty()) {
-        AddControl(hwnd, L"STATIC", g_statusText.c_str(), 0, 20, 184, 460, 42, 0);
+        AddControl(hwnd, L"STATIC", g_statusText.c_str(), 0, 20, 210, 460, 86, 0);
     }
 }
 
@@ -328,8 +386,16 @@ void RefreshStartupState(HWND hwnd) {
                 g_statusText = trayapp::gui::DescribeRpcStatus(licenseStatus);
             }
         }
+
+        if (g_licenseState.licensed) {
+            trayapp::gui::AvDatabaseInfo info;
+            if (trayapp::gui::GetAvDatabaseInfo(info) == trayapp::gui::kRpcSuccess) {
+                g_avDatabaseInfo = info;
+            }
+        }
     } else {
         g_licenseState = {};
+        g_avDatabaseInfo = {};
     }
 
     RenderMainContent(hwnd);
@@ -347,8 +413,16 @@ void PollLicenseState(HWND hwnd) {
         g_statusText.clear();
     } else if (status == trayapp::gui::kRpcNoLicense) {
         g_licenseState = {};
+        g_avDatabaseInfo = {};
     } else {
         g_statusText = trayapp::gui::DescribeRpcStatus(status);
+    }
+
+    if (g_licenseState.licensed) {
+        trayapp::gui::AvDatabaseInfo info;
+        if (trayapp::gui::GetAvDatabaseInfo(info) == trayapp::gui::kRpcSuccess) {
+            g_avDatabaseInfo = info;
+        }
     }
 
     RenderMainContent(hwnd);
@@ -382,6 +456,10 @@ void HandleActivate(HWND hwnd) {
     }
 
     g_licenseState = state;
+    trayapp::gui::AvDatabaseInfo info;
+    if (trayapp::gui::GetAvDatabaseInfo(info) == trayapp::gui::kRpcSuccess) {
+        g_avDatabaseInfo = info;
+    }
     g_statusText.clear();
     RenderMainContent(hwnd);
 }
@@ -390,15 +468,90 @@ void HandleLogout(HWND hwnd) {
     trayapp::gui::Logout();
     g_authState = {};
     g_licenseState = {};
+    g_avDatabaseInfo = {};
     g_statusText.clear();
     RenderMainContent(hwnd);
 }
 
-void HandleScan(HWND hwnd) {
-    const unsigned long status = trayapp::gui::EnsureAntivirusAvailable();
+void HandleScanFile(HWND hwnd) {
+    const std::wstring path = PickFile(hwnd);
+    if (path.empty()) {
+        return;
+    }
+
+    trayapp::gui::ScanReport report;
+    const unsigned long status = trayapp::gui::ScanFile(path, report);
+    g_statusText = status == trayapp::gui::kRpcSuccess ? FormatScanReport(report) : trayapp::gui::DescribeRpcStatus(status);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_licenseState = {};
+    }
+    RenderMainContent(hwnd);
+}
+
+void HandleScanDirectory(HWND hwnd) {
+    const std::wstring path = PickDirectory(hwnd);
+    if (path.empty()) {
+        return;
+    }
+
+    trayapp::gui::ScanReport report;
+    const unsigned long status = trayapp::gui::ScanDirectory(path, report);
+    g_statusText = status == trayapp::gui::kRpcSuccess ? FormatScanReport(report) : trayapp::gui::DescribeRpcStatus(status);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_licenseState = {};
+    }
+    RenderMainContent(hwnd);
+}
+
+void HandleScanFixedDrives(HWND hwnd) {
+    trayapp::gui::ScanReport report;
+    const unsigned long status = trayapp::gui::ScanFixedDrives(report);
+    g_statusText = status == trayapp::gui::kRpcSuccess ? FormatScanReport(report) : trayapp::gui::DescribeRpcStatus(status);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_licenseState = {};
+    }
+    RenderMainContent(hwnd);
+}
+
+void HandleSchedule(HWND hwnd) {
+    const unsigned long status = trayapp::gui::ConfigureSchedule(60);
     g_statusText = status == trayapp::gui::kRpcSuccess
-        ? L"Проверка доступна: лицензия подтверждена службой."
+        ? L"Сканирование по расписанию включено: каждые 60 минут."
         : trayapp::gui::DescribeRpcStatus(status);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_licenseState = {};
+    }
+    RenderMainContent(hwnd);
+}
+
+void HandleMonitorDirectory(HWND hwnd) {
+    const std::wstring path = PickDirectory(hwnd);
+    if (path.empty()) {
+        return;
+    }
+
+    const unsigned long status = trayapp::gui::AddMonitorDirectory(path);
+    g_statusText = status == trayapp::gui::kRpcSuccess
+        ? L"Мониторинг директории включен: " + path
+        : trayapp::gui::DescribeRpcStatus(status);
+    if (status != trayapp::gui::kRpcSuccess) {
+        g_licenseState = {};
+    }
+    RenderMainContent(hwnd);
+}
+
+void HandleMonitorReport(HWND hwnd) {
+    trayapp::gui::ScanReport report;
+    unsigned long status = trayapp::gui::GetMonitorScanReport(report);
+    if (status == trayapp::gui::kRpcSuccess && report.scannedFiles == 0) {
+        trayapp::gui::ScanReport scheduled;
+        status = trayapp::gui::GetScheduledScanReport(scheduled);
+        g_statusText = status == trayapp::gui::kRpcSuccess
+            ? (scheduled.scannedFiles == 0 ? L"Фоновых результатов пока нет." : FormatScanReport(scheduled))
+            : trayapp::gui::DescribeRpcStatus(status);
+    } else {
+        g_statusText = status == trayapp::gui::kRpcSuccess ? FormatScanReport(report) : trayapp::gui::DescribeRpcStatus(status);
+    }
     if (status != trayapp::gui::kRpcSuccess) {
         g_licenseState = {};
     }
@@ -470,8 +623,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case IDC_LOGOUT_BUTTON:
             HandleLogout(hwnd);
             return 0;
-        case IDC_SCAN_BUTTON:
-            HandleScan(hwnd);
+        case IDC_SCAN_FILE_BUTTON:
+            HandleScanFile(hwnd);
+            return 0;
+        case IDC_SCAN_DIR_BUTTON:
+            HandleScanDirectory(hwnd);
+            return 0;
+        case IDC_SCAN_DRIVES_BUTTON:
+            HandleScanFixedDrives(hwnd);
+            return 0;
+        case IDC_SCHEDULE_BUTTON:
+            HandleSchedule(hwnd);
+            return 0;
+        case IDC_MONITOR_BUTTON:
+            HandleMonitorDirectory(hwnd);
+            return 0;
+        case IDC_MONITOR_REPORT_BUTTON:
+            HandleMonitorReport(hwnd);
             return 0;
         default:
             break;
@@ -523,12 +691,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const std::wstring_view commandLine = GetCommandLineW();
+    const HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
     if (trayapp::gui::CheckServiceStartup() == trayapp::gui::StartupDecision::Exit) {
+        if (SUCCEEDED(comInit)) {
+            CoUninitialize();
+        }
         return 0;
     }
 
     if (!IsServiceChildMode(commandLine) || !trayapp::gui::IsParentServiceProcess()) {
+        if (SUCCEEDED(comInit)) {
+            CoUninitialize();
+        }
         return 0;
     }
 
@@ -536,6 +711,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
 
     if (!EnsureSingleInstancePerUser()) {
+        if (SUCCEEDED(comInit)) {
+            CoUninitialize();
+        }
         return 0;
     }
 
@@ -552,6 +730,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     if (!RegisterClassExW(&wc)) {
         ReleaseSingleInstanceMutex();
+        if (SUCCEEDED(comInit)) {
+            CoUninitialize();
+        }
         return 1;
     }
 
@@ -563,7 +744,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         520,
-        220,
+        340,
         nullptr,
         nullptr,
         instance,
@@ -571,6 +752,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     if (g_mainWindow == nullptr) {
         ReleaseSingleInstanceMutex();
+        if (SUCCEEDED(comInit)) {
+            CoUninitialize();
+        }
         return 1;
     }
 
@@ -586,5 +770,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
 
     ReleaseSingleInstanceMutex();
+    if (SUCCEEDED(comInit)) {
+        CoUninitialize();
+    }
     return static_cast<int>(msg.wParam);
 }

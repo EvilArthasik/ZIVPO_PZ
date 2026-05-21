@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "rpc/tray_control_api.h"
+#include "service/antivirus_manager.h"
 #include "service/auth_license_manager.h"
 
 extern "C" void* __RPC_USER midl_user_allocate(size_t size);
@@ -32,6 +33,7 @@ CRITICAL_SECTION g_childrenLock = {};
 std::vector<ChildProcess> g_children;
 LONG g_stopping = 0;
 trayapp::service::AuthLicenseManager g_authLicenseManager;
+trayapp::service::AntivirusManager g_antivirusManager;
 constexpr DWORD kStopConfirmationTimeoutSeconds = 30;
 
 class UniqueHandle {
@@ -462,6 +464,7 @@ RPC_STATUS RequestRpcServerStop()
 
     SetServiceStatusState(SERVICE_STOP_PENDING);
     g_authLicenseManager.Stop();
+    g_antivirusManager.Stop();
     TerminateAllChildProcesses();
 
     const RPC_STATUS status = RpcMgmtStopServerListening(nullptr);
@@ -538,6 +541,8 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
     }
 
     g_authLicenseManager.Start();
+    g_antivirusManager.Start();
+    g_antivirusManager.LoadDatabases();
     SetServiceStatusState(SERVICE_RUNNING);
     LaunchGuiForAllUserSessions();
 
@@ -548,6 +553,7 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
 
     SetServiceStatusState(SERVICE_STOP_PENDING);
     g_authLicenseManager.Stop();
+    g_antivirusManager.Stop();
     TerminateAllChildProcesses();
     RpcServerUnregisterIf(TrayControl_v1_0_s_ifspec, nullptr, FALSE);
 
@@ -595,6 +601,28 @@ void FillRpcLicenseState(TrayLicenseState* state, const trayapp::service::Licens
     state->licensed = snapshot.licensed ? 1 : 0;
     state->blocked = snapshot.blocked ? 1 : 0;
     state->expiresAtUnix = snapshot.expiresAtUnix;
+}
+
+void FillRpcDatabaseInfo(TrayAvDatabaseInfo* info, const trayapp::service::AvDatabaseInfo& snapshot)
+{
+    if (info == nullptr) {
+        return;
+    }
+
+    info->releaseDateUnix = snapshot.releaseDateUnix;
+    info->recordCount = snapshot.recordCount;
+}
+
+void FillRpcScanReport(TrayScanReport* report, const trayapp::service::ScanReport& snapshot)
+{
+    if (report == nullptr) {
+        return;
+    }
+
+    report->malicious = snapshot.malicious ? 1 : 0;
+    report->scannedFiles = snapshot.scannedFiles;
+    report->infectedFiles = snapshot.infectedFiles;
+    AssignRpcString(&report->summary, snapshot.summary);
 }
 
 [[nodiscard]] bool CommandLineContains(std::wstring_view commandLine, std::wstring_view argument)
@@ -821,6 +849,9 @@ extern "C" unsigned long TrayActivateProduct(handle_t, wchar_t* licenseKey, Tray
 {
     trayapp::service::LicenseSnapshot snapshot;
     const unsigned long result = g_authLicenseManager.Activate(licenseKey != nullptr ? licenseKey : L"", snapshot);
+    if (result == trayapp::service::kRpcSuccess) {
+        g_antivirusManager.LoadDatabases();
+    }
     FillRpcLicenseState(state, snapshot);
     return result;
 }
@@ -828,6 +859,94 @@ extern "C" unsigned long TrayActivateProduct(handle_t, wchar_t* licenseKey, Tray
 extern "C" unsigned long TrayEnsureAntivirusAvailable(handle_t)
 {
     return g_authLicenseManager.EnsureAntivirusAvailable();
+}
+
+extern "C" unsigned long TrayGetAvDatabaseInfo(handle_t, TrayAvDatabaseInfo* info)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    FillRpcDatabaseInfo(info, g_antivirusManager.DatabaseInfo());
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayScanFile(handle_t, wchar_t* path, TrayScanReport* report)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    FillRpcScanReport(report, g_antivirusManager.ScanFile(path != nullptr ? path : L""));
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayScanDirectory(handle_t, wchar_t* path, TrayScanReport* report)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    FillRpcScanReport(report, g_antivirusManager.ScanDirectory(path != nullptr ? path : L""));
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayScanFixedDrives(handle_t, TrayScanReport* report)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    FillRpcScanReport(report, g_antivirusManager.ScanFixedDrives());
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayConfigureSchedule(handle_t, unsigned long intervalMinutes)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    g_antivirusManager.ConfigureSchedule(intervalMinutes);
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayGetScheduledScanReport(handle_t, TrayScanReport* report)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    FillRpcScanReport(report, g_antivirusManager.LastScheduledReport());
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayAddMonitorDirectory(handle_t, wchar_t* path)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    g_antivirusManager.AddMonitorDirectory(path != nullptr ? path : L"");
+    return trayapp::service::kRpcSuccess;
+}
+
+extern "C" unsigned long TrayGetMonitorScanReport(handle_t, TrayScanReport* report)
+{
+    const unsigned long access = g_authLicenseManager.EnsureAntivirusAvailable();
+    if (access != trayapp::service::kRpcSuccess) {
+        return access;
+    }
+
+    FillRpcScanReport(report, g_antivirusManager.LastMonitorReport());
+    return trayapp::service::kRpcSuccess;
 }
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR commandLine, int)
