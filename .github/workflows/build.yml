@@ -1,0 +1,70 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset windows-msvc-x64
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TraySampleApp-windows-x64
+          path: |
+            build/Release/TraySampleApp.exe
+            build/Release/TraySampleService.exe
+          if-no-files-found: error
+
+  windows-installer:
+    runs-on: windows-latest
+    needs: windows-build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: TraySampleApp-windows-x64
+          path: build/Release
+
+      - name: Resolve installer version
+        id: version
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref_name }}"
+          if ($ref -match '^v?(\d+\.\d+\.\d+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = "0.0.1+${{ github.run_number }}"
+          }
+          Write-Host "Installer version: $version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: .\scripts\build-windows-installer.ps1 -SkipBuild -AppVersion "${{ steps.version.outputs.version }}"
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TraySampleApp-windows-installer
+          path: build/installer/output/*.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>C:\Users\golov\Desktop\ZIVPO\ZIVPO_Practice\trayapp\build-run\x64\Release\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\golov\Desktop\ZIVPO\ZIVPO_Practice\trayapp\build-run\x64\Release\TrayRpcGenerated</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\golov\Desktop\ZIVPO\ZIVPO_Practice\trayapp\build-run\Release\TraySampleApp.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\golov\Desktop\ZIVPO\ZIVPO_Practice\trayapp\build-run\Release\TraySampleService.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\golov\Desktop\ZIVPO\ZIVPO_Practice\trayapp\build-run\x64\Release\ALL_BUILD</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>

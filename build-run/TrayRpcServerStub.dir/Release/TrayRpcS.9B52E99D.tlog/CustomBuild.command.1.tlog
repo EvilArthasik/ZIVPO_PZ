@@ -1,0 +1,10 @@
+^C:\USERS\GOLOV\DESKTOP\ZIVPO\ZIVPO_PRACTICE\TRAYAPP\CMAKELISTS.TXT
+setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SC:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp -BC:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run --check-stamp-file C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
