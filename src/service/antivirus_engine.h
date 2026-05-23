@@ -13,6 +13,7 @@ enum class ObjectType : unsigned char {
 };
 
 struct AvRecord {
+    std::string id;
     std::uint64_t objectSignaturePrefix = 0;
     std::uint32_t objectSignatureLength = 0;
     std::vector<unsigned char> firstBytes;

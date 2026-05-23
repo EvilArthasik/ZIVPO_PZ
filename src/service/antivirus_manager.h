@@ -48,8 +48,9 @@ private:
     void UpdateLoop();
     void MonitorLoop();
     void ScanChangedMonitorFiles();
-    bool LoadDatabasesLocked();
+    bool LoadDatabasesLocked(std::vector<std::string>* damagedRecordIds = nullptr);
     bool UpdateDatabases();
+    bool FetchDamagedRecords(const std::vector<std::string>& ids, std::vector<AvRecord>& records);
 
     mutable std::mutex mutex_;
     std::condition_variable wake_;

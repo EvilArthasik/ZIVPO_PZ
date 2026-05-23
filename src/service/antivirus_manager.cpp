@@ -295,6 +295,105 @@ void MergeReport(ScanReport& target, const ScanReport& source)
     return true;
 }
 
+[[nodiscard]] bool HttpPostJson(const wchar_t* path, const std::string& body, std::string& contentType, std::vector<unsigned char>& response)
+{
+    WinHttpHandle session(WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!session) {
+        return false;
+    }
+
+    DWORD secureProtocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+    WinHttpSetOption(session.Get(), WINHTTP_OPTION_SECURE_PROTOCOLS, &secureProtocols, sizeof(secureProtocols));
+
+    WinHttpHandle connection(WinHttpConnect(session.Get(), kServerHost, kServerPort, 0));
+    if (!connection) {
+        return false;
+    }
+
+    WinHttpHandle request(WinHttpOpenRequest(
+        connection.Get(),
+        L"POST",
+        path,
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        WINHTTP_FLAG_SECURE));
+    if (!request) {
+        return false;
+    }
+
+    DWORD securityFlags =
+        SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+        SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    WinHttpSetOption(request.Get(), WINHTTP_OPTION_SECURITY_FLAGS, &securityFlags, sizeof(securityFlags));
+
+    const std::string credentials = "user:Strong#456";
+    const std::string authorization = "Authorization: Basic " + Base64Encode(credentials);
+    const std::wstring headers = Utf8ToWide(authorization + "\r\nAccept: multipart/mixed\r\nContent-Type: application/json\r\n");
+
+    const BOOL sent = WinHttpSendRequest(
+        request.Get(),
+        headers.c_str(),
+        static_cast<DWORD>(headers.size()),
+        const_cast<char*>(body.data()),
+        static_cast<DWORD>(body.size()),
+        static_cast<DWORD>(body.size()),
+        0);
+    if (!sent || !WinHttpReceiveResponse(request.Get(), nullptr)) {
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    WinHttpQueryHeaders(
+        request.Get(),
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX,
+        &statusCode,
+        &statusCodeSize,
+        WINHTTP_NO_HEADER_INDEX);
+    if (statusCode < 200 || statusCode >= 300) {
+        return false;
+    }
+
+    wchar_t contentTypeBuffer[512] = {};
+    DWORD contentTypeSize = sizeof(contentTypeBuffer);
+    if (WinHttpQueryHeaders(
+            request.Get(),
+            WINHTTP_QUERY_CONTENT_TYPE,
+            WINHTTP_HEADER_NAME_BY_INDEX,
+            contentTypeBuffer,
+            &contentTypeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        contentType.clear();
+        for (const wchar_t* ch = contentTypeBuffer; *ch != L'\0'; ++ch) {
+            contentType.push_back(*ch <= 0x7F ? static_cast<char>(*ch) : '?');
+        }
+    }
+
+    response.clear();
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request.Get(), &available)) {
+            return false;
+        }
+        if (available == 0) {
+            break;
+        }
+        const std::size_t offset = response.size();
+        response.resize(offset + available);
+        DWORD read = 0;
+        if (!WinHttpReadData(request.Get(), response.data() + offset, available, &read)) {
+            return false;
+        }
+        response.resize(offset + read);
+    }
+
+    return true;
+}
+
 [[nodiscard]] std::string LowerAscii(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
@@ -377,6 +476,35 @@ void PutPart(const std::string& headers, const std::vector<unsigned char>& body,
     return package;
 }
 
+void MergeRecords(std::vector<AvRecord>& records, const std::vector<AvRecord>& replacements)
+{
+    for (const AvRecord& replacement : replacements) {
+        const auto found = std::find_if(records.begin(), records.end(), [&](const AvRecord& record) {
+            return !record.id.empty() && record.id == replacement.id;
+        });
+        if (found == records.end()) {
+            records.push_back(replacement);
+        } else {
+            *found = replacement;
+        }
+    }
+}
+
+[[nodiscard]] std::string BuildIdsJson(const std::vector<std::string>& ids)
+{
+    std::string body = "{\"ids\":[";
+    for (std::size_t index = 0; index < ids.size(); ++index) {
+        if (index > 0) {
+            body.push_back(',');
+        }
+        body.push_back('"');
+        body += ids[index];
+        body.push_back('"');
+    }
+    body += "]}";
+    return body;
+}
+
 } // namespace
 
 AntivirusManager::AntivirusManager()
@@ -414,9 +542,23 @@ void AntivirusManager::Stop()
 
 void AntivirusManager::LoadDatabases()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!LoadDatabasesLocked()) {
-        engine_.LoadBuiltinDatabase();
+    std::vector<std::string> damagedRecordIds;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (LoadDatabasesLocked(&damagedRecordIds) && damagedRecordIds.empty()) {
+            return;
+        }
+    }
+
+    if (UpdateDatabases()) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!LoadDatabasesLocked()) {
+            engine_.LoadBuiltinDatabase();
+        }
     }
 }
 
@@ -576,18 +718,18 @@ void AntivirusManager::UpdateLoop()
     }
 }
 
-bool AntivirusManager::LoadDatabasesLocked()
+bool AntivirusManager::LoadDatabasesLocked(std::vector<std::string>* damagedRecordIds)
 {
     std::vector<AvRecord> records;
     long long releaseDateUnix = 0;
     if (databaseStore_.EnsureDefaultDatabase() &&
-        databaseStore_.Load(records, releaseDateUnix)) {
+        databaseStore_.Load(records, releaseDateUnix, damagedRecordIds)) {
         engine_.LoadRecords(records, releaseDateUnix);
         return true;
     }
 
     if (databaseStore_.RestoreBackup() &&
-        databaseStore_.Load(records, releaseDateUnix)) {
+        databaseStore_.Load(records, releaseDateUnix, damagedRecordIds)) {
         engine_.LoadRecords(records, releaseDateUnix);
         return true;
     }
@@ -612,9 +754,13 @@ bool AntivirusManager::UpdateDatabases()
 
     AvDatabasePackage package = ParseMultipart(contentType, response);
     std::vector<AvRecord> records;
+    std::vector<std::string> damagedRecordIds;
     long long releaseDateUnix = 0;
-    if (!AntivirusDatabaseStore::VerifyAndParse(package, records, releaseDateUnix)) {
+    if (!AntivirusDatabaseStore::VerifyAndParse(package, records, releaseDateUnix, &damagedRecordIds)) {
         return false;
+    }
+    if (!damagedRecordIds.empty()) {
+        static_cast<void>(FetchDamagedRecords(damagedRecordIds, records));
     }
 
     if (!databaseStore_.BackupCurrent()) {
@@ -635,6 +781,30 @@ bool AntivirusManager::UpdateDatabases()
     }
 
     return true;
+}
+
+bool AntivirusManager::FetchDamagedRecords(const std::vector<std::string>& ids, std::vector<AvRecord>& records)
+{
+    if (ids.empty()) {
+        return true;
+    }
+
+    std::string contentType;
+    std::vector<unsigned char> response;
+    if (!HttpPostJson(L"/api/signatures/binary/by-ids", BuildIdsJson(ids), contentType, response)) {
+        return false;
+    }
+
+    AvDatabasePackage package = ParseMultipart(contentType, response);
+    std::vector<AvRecord> replacements;
+    std::vector<std::string> stillDamaged;
+    long long releaseDateUnix = 0;
+    if (!AntivirusDatabaseStore::VerifyAndParse(package, replacements, releaseDateUnix, &stillDamaged)) {
+        return false;
+    }
+
+    MergeRecords(records, replacements);
+    return stillDamaged.empty();
 }
 
 void AntivirusManager::MonitorLoop()

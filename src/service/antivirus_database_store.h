@@ -22,8 +22,8 @@ public:
     [[nodiscard]] std::filesystem::path BackupRoot() const;
 
     bool EnsureDefaultDatabase();
-    bool Load(std::vector<AvRecord>& records, long long& releaseDateUnix) const;
-    bool LoadBackup(std::vector<AvRecord>& records, long long& releaseDateUnix) const;
+    bool Load(std::vector<AvRecord>& records, long long& releaseDateUnix, std::vector<std::string>* damagedRecordIds = nullptr) const;
+    bool LoadBackup(std::vector<AvRecord>& records, long long& releaseDateUnix, std::vector<std::string>* damagedRecordIds = nullptr) const;
     bool RestoreBackup();
     bool BackupCurrent();
     bool SavePackage(const AvDatabasePackage& package);
@@ -32,7 +32,8 @@ public:
     [[nodiscard]] static bool VerifyAndParse(
         const AvDatabasePackage& package,
         std::vector<AvRecord>& records,
-        long long& releaseDateUnix);
+        long long& releaseDateUnix,
+        std::vector<std::string>* damagedRecordIds = nullptr);
 
 private:
     [[nodiscard]] AvDatabasePackage ReadPackage(const std::filesystem::path& directory) const;

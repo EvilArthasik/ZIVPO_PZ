@@ -14,6 +14,7 @@
 #include <iterator>
 #include <limits>
 #include <sstream>
+#include <iomanip>
 #include <utility>
 
 namespace trayapp::service {
@@ -308,6 +309,18 @@ void AppendBytes(std::vector<unsigned char>& out, const std::vector<unsigned cha
     return prefix;
 }
 
+[[nodiscard]] std::string FormatUuid(std::uint64_t most, std::uint64_t least)
+{
+    std::ostringstream stream;
+    stream << std::hex << std::nouppercase << std::setfill('0')
+        << std::setw(8) << static_cast<unsigned long>((most >> 32) & 0xFFFFFFFF) << '-'
+        << std::setw(4) << static_cast<unsigned long>((most >> 16) & 0xFFFF) << '-'
+        << std::setw(4) << static_cast<unsigned long>(most & 0xFFFF) << '-'
+        << std::setw(4) << static_cast<unsigned long>((least >> 48) & 0xFFFF) << '-'
+        << std::setw(12) << (least & 0xFFFFFFFFFFFFULL);
+    return stream.str();
+}
+
 [[nodiscard]] ObjectType FileTypeToObjectType(const std::string& value)
 {
     std::string lower = value;
@@ -539,6 +552,7 @@ bool WriteFile(const std::filesystem::path& path, const std::vector<unsigned cha
 AvRecord MakeDefaultRecord(const std::string& name, const std::vector<unsigned char>& signature, std::uint64_t offsetBegin, std::uint64_t offsetEnd, ObjectType type)
 {
     AvRecord record;
+    record.id = name;
     record.objectSignaturePrefix = ReadLittleEndianPrefix(signature);
     record.objectSignatureLength = static_cast<std::uint32_t>(signature.size());
     record.firstBytes = signature;
@@ -641,14 +655,14 @@ bool AntivirusDatabaseStore::EnsureDefaultDatabase()
     return WritePackage(root_, BuildDefaultPackage());
 }
 
-bool AntivirusDatabaseStore::Load(std::vector<AvRecord>& records, long long& releaseDateUnix) const
+bool AntivirusDatabaseStore::Load(std::vector<AvRecord>& records, long long& releaseDateUnix, std::vector<std::string>* damagedRecordIds) const
 {
-    return VerifyAndParse(ReadPackage(root_), records, releaseDateUnix);
+    return VerifyAndParse(ReadPackage(root_), records, releaseDateUnix, damagedRecordIds);
 }
 
-bool AntivirusDatabaseStore::LoadBackup(std::vector<AvRecord>& records, long long& releaseDateUnix) const
+bool AntivirusDatabaseStore::LoadBackup(std::vector<AvRecord>& records, long long& releaseDateUnix, std::vector<std::string>* damagedRecordIds) const
 {
-    return VerifyAndParse(ReadPackage(BackupRoot()), records, releaseDateUnix);
+    return VerifyAndParse(ReadPackage(BackupRoot()), records, releaseDateUnix, damagedRecordIds);
 }
 
 bool AntivirusDatabaseStore::RestoreBackup()
@@ -715,7 +729,11 @@ AvDatabasePackage AntivirusDatabaseStore::BuildDefaultPackage()
     return package;
 }
 
-bool AntivirusDatabaseStore::VerifyAndParse(const AvDatabasePackage& package, std::vector<AvRecord>& records, long long& releaseDateUnix)
+bool AntivirusDatabaseStore::VerifyAndParse(
+    const AvDatabasePackage& package,
+    std::vector<AvRecord>& records,
+    long long& releaseDateUnix,
+    std::vector<std::string>* damagedRecordIds)
 {
     if (package.manifest.empty() || package.manifestSignature.empty() || package.data.empty()) {
         return false;
@@ -805,6 +823,7 @@ bool AntivirusDatabaseStore::VerifyAndParse(const AvDatabasePackage& package, st
         static_cast<void>(most);
         static_cast<void>(least);
         static_cast<void>(updatedAt);
+        const std::string id = FormatUuid(most, least);
 
         const std::vector<unsigned char> canonicalPayload = CanonicalRecordPayload(
             name,
@@ -826,6 +845,7 @@ bool AntivirusDatabaseStore::VerifyAndParse(const AvDatabasePackage& package, st
         }
 
         AvRecord record;
+        record.id = id;
         record.objectSignaturePrefix = ReadLittleEndianPrefix(firstBytes);
         record.objectSignatureLength = static_cast<std::uint32_t>(totalLength);
         record.firstBytes = std::move(firstBytes);
@@ -840,6 +860,9 @@ bool AntivirusDatabaseStore::VerifyAndParse(const AvDatabasePackage& package, st
         const bool localRecordSignature = record.avRecordSignature == SignRecord(record);
         const bool webRecordSignature = VerifySha256Rsa(canonicalPayload, record.avRecordSignature);
         if (!localRecordSignature && !webRecordSignature) {
+            if (damagedRecordIds != nullptr && !id.empty()) {
+                damagedRecordIds->push_back(id);
+            }
             continue;
         }
 
