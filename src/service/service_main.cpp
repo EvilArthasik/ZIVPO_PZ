@@ -130,7 +130,9 @@ void SetServiceStatusState(DWORD state, DWORD win32ExitCode = NO_ERROR)
     g_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     g_status.dwCurrentState = state;
     g_status.dwWin32ExitCode = win32ExitCode;
-    g_status.dwControlsAccepted = state == SERVICE_RUNNING ? SERVICE_ACCEPT_SESSIONCHANGE : 0;
+    g_status.dwControlsAccepted = state == SERVICE_RUNNING
+        ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SESSIONCHANGE
+        : 0;
 
     static DWORD checkpoint = 1;
     if (state == SERVICE_START_PENDING || state == SERVICE_STOP_PENDING) {
@@ -473,6 +475,13 @@ RPC_STATUS RequestRpcServerStop()
 
 DWORD WINAPI ServiceControlHandler(DWORD control, DWORD eventType, LPVOID eventData, LPVOID)
 {
+    if (control == SERVICE_CONTROL_STOP) {
+        if (ConfirmStopInActiveSession()) {
+            static_cast<void>(RequestRpcServerStop());
+        }
+        return NO_ERROR;
+    }
+
     if (control != SERVICE_CONTROL_SESSIONCHANGE) {
         return NO_ERROR;
     }

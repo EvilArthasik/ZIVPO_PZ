@@ -49,7 +49,7 @@ constexpr std::size_t kPrefixSize = 8;
     }
 
     std::vector<unsigned char> digest(32);
-    if (BCryptHashData(hash, const_cast<PUCHAR>(data), static_cast<ULONG>(size), 0) != 0 ||
+    if ((size > 0 && BCryptHashData(hash, const_cast<PUCHAR>(data), static_cast<ULONG>(size), 0) != 0) ||
         BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) != 0) {
         digest.clear();
     }
@@ -76,6 +76,9 @@ void AppendInteger(std::vector<unsigned char>& output, std::uint64_t value, std:
     std::vector<unsigned char> bytes;
     AppendInteger(bytes, record.objectSignaturePrefix, 8);
     AppendInteger(bytes, record.objectSignatureLength, 4);
+    AppendInteger(bytes, record.firstBytes.size(), 4);
+    bytes.insert(bytes.end(), record.firstBytes.begin(), record.firstBytes.end());
+    AppendInteger(bytes, record.remainderLength, 8);
     bytes.insert(bytes.end(), record.objectSignature.begin(), record.objectSignature.end());
     AppendInteger(bytes, record.offsetBegin, 8);
     AppendInteger(bytes, record.offsetEnd, 8);
@@ -142,6 +145,26 @@ AvDatabaseInfo AntivirusEngine::DatabaseInfo() const
     return info_;
 }
 
+void AntivirusEngine::LoadRecords(const std::vector<AvRecord>& records, long long releaseDateUnix)
+{
+    records_.clear();
+    for (const AvRecord& record : records) {
+        if (record.objectSignatureLength < kPrefixSize ||
+            record.firstBytes.size() < kPrefixSize ||
+            record.objectSignature.empty()) {
+            continue;
+        }
+
+        records_[record.objectSignaturePrefix].push_back(record);
+    }
+
+    info_.releaseDateUnix = releaseDateUnix;
+    info_.recordCount = 0;
+    for (const auto& bucket : records_) {
+        info_.recordCount += static_cast<unsigned long>(bucket.second.size());
+    }
+}
+
 ScanResult AntivirusEngine::Scan(IByteStream& stream, ObjectType objectType) const
 {
     if (records_.empty() || stream.Size() < kPrefixSize) {
@@ -171,7 +194,10 @@ ScanResult AntivirusEngine::Scan(IByteStream& stream, ObjectType objectType) con
                 continue;
             }
 
-            if (offset < record.offsetBegin || offset > record.offsetEnd || record.objectSignatureLength < kPrefixSize) {
+            if (offset < record.offsetBegin ||
+                offset > record.offsetEnd ||
+                record.objectSignatureLength < record.firstBytes.size() ||
+                record.firstBytes.size() < kPrefixSize) {
                 continue;
             }
 
@@ -180,16 +206,26 @@ ScanResult AntivirusEngine::Scan(IByteStream& stream, ObjectType objectType) con
                 continue;
             }
 
-            std::vector<unsigned char> signatureBytes(record.objectSignatureLength);
-            std::copy(prefix.begin(), prefix.end(), signatureBytes.begin());
-
-            const std::size_t tailSize = static_cast<std::size_t>(record.objectSignatureLength - kPrefixSize);
-            std::size_t tailRead = 0;
-            if (!stream.Read(signatureBytes.data() + kPrefixSize, tailSize, tailRead) || tailRead != tailSize) {
+            std::vector<unsigned char> firstBytes(record.firstBytes.size());
+            std::copy(prefix.begin(), prefix.end(), firstBytes.begin());
+            const std::size_t firstTailSize = record.firstBytes.size() - kPrefixSize;
+            std::size_t firstTailRead = 0;
+            if (!stream.Read(firstBytes.data() + kPrefixSize, firstTailSize, firstTailRead) || firstTailRead != firstTailSize) {
                 continue;
             }
 
-            if (Sha256(signatureBytes) == record.objectSignature) {
+            if (firstBytes != record.firstBytes) {
+                continue;
+            }
+
+            std::vector<unsigned char> tail(static_cast<std::size_t>(record.remainderLength));
+            std::size_t tailRead = 0;
+            if (!tail.empty() &&
+                (!stream.Read(tail.data(), tail.size(), tailRead) || tailRead != tail.size())) {
+                continue;
+            }
+
+            if (Sha256(tail) == record.objectSignature) {
                 return ScanResult { true, record.name, offset };
             }
         }
@@ -212,7 +248,9 @@ void AntivirusEngine::AddRecord(
     AvRecord record;
     record.objectSignaturePrefix = ReadLittleEndianPrefix(signature.data());
     record.objectSignatureLength = static_cast<std::uint32_t>(signature.size());
-    record.objectSignature = Sha256(signature);
+    record.firstBytes = signature;
+    record.objectSignature = Sha256(nullptr, 0);
+    record.remainderLength = 0;
     record.offsetBegin = offsetBegin;
     record.offsetEnd = offsetEnd;
     record.objectType = objectType;

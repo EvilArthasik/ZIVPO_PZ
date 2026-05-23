@@ -1,5 +1,6 @@
 #pragma once
 
+#include "service/antivirus_database_store.h"
 #include "service/antivirus_engine.h"
 
 #include <atomic>
@@ -44,15 +45,20 @@ public:
 
 private:
     void SchedulerLoop();
+    void UpdateLoop();
     void MonitorLoop();
     void ScanChangedMonitorFiles();
+    bool LoadDatabasesLocked();
+    bool UpdateDatabases();
 
     mutable std::mutex mutex_;
     std::condition_variable wake_;
     std::thread schedulerThread_;
+    std::thread updateThread_;
     std::thread monitorThread_;
     std::atomic_bool stopping_ = false;
 
+    AntivirusDatabaseStore databaseStore_;
     AntivirusEngine engine_;
     unsigned long scheduleIntervalMinutes_ = 0;
     ScanReport lastScheduledReport_;

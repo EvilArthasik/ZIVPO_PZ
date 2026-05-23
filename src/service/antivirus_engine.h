@@ -15,7 +15,9 @@ enum class ObjectType : unsigned char {
 struct AvRecord {
     std::uint64_t objectSignaturePrefix = 0;
     std::uint32_t objectSignatureLength = 0;
+    std::vector<unsigned char> firstBytes;
     std::vector<unsigned char> objectSignature;
+    std::uint64_t remainderLength = 0;
     std::uint64_t offsetBegin = 0;
     std::uint64_t offsetEnd = 0;
     ObjectType objectType = ObjectType::PeFile;
@@ -46,6 +48,7 @@ public:
 class AntivirusEngine {
 public:
     void LoadBuiltinDatabase();
+    void LoadRecords(const std::vector<AvRecord>& records, long long releaseDateUnix);
     [[nodiscard]] AvDatabaseInfo DatabaseInfo() const;
     [[nodiscard]] ScanResult Scan(IByteStream& stream, ObjectType objectType) const;
 
