@@ -1,0 +1,7 @@
+C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/TrayRpcGenerated.dir
+C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/TrayRpcClientStub.dir
+C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/TrayRpcServerStub.dir
+C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/TraySampleApp.dir
+C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/TraySampleService.dir
+C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/ALL_BUILD.dir
+C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/ZERO_CHECK.dir

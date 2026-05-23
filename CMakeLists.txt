@@ -1,6 +1,10 @@
 ﻿cmake_minimum_required(VERSION 3.21)
 project(TraySampleApp LANGUAGES C CXX)
 
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "Use static MSVC runtime" FORCE)
+endif()
+
 if(NOT WIN32)
     message(FATAL_ERROR "TraySampleApp uses Win32 service/RPC APIs and must be built on Windows")
 endif()

@@ -1,0 +1,30 @@
+^C:\USERS\GOLOV\DESKTOP\ZIVPO\ZIVPO_PRACTICE\TRAYAPP\BUILD-RUN\CMAKEFILES\9F471D5278B2C6C64E8CFE6C71C3D546\TRAY_CONTROL.H.RULE
+setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E make_directory C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/generated/rpc
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\midl.exe" /nologo /char signed /env amd64 /out C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/generated/rpc /h tray_control.h /client stub /server stub C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/src/rpc/tray_control.idl
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\GOLOV\DESKTOP\ZIVPO\ZIVPO_PRACTICE\TRAYAPP\BUILD-RUN\CMAKEFILES\F7673DAC0A3FBD484B2D67BD729F86B7\TRAYRPCGENERATED.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\GOLOV\DESKTOP\ZIVPO\ZIVPO_PRACTICE\TRAYAPP\CMAKELISTS.TXT
+setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SC:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp -BC:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run --check-stamp-file C:/Users/golov/Desktop/ZIVPO/ZIVPO_Practice/trayapp/build-run/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
